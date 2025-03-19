@@ -2,91 +2,78 @@
 pragma solidity ^0.8.0;
 
 contract RideSharing {
-    struct Driver {
-        string name;
-        string vehicle;
-        address driverAddress;
-        bool isAvailable;
-    }
+    // Ride status options
+    enum RideStatus { NotStarted, Ongoing, Completed }
 
-    struct RideRequest {
-        string pickup;
+    // Ride struct
+    struct Ride {
+        uint id;
+        address payable driver;
+        string source;
         string destination;
-        address requester;
-        bool isAccepted;
-        address driver;
+        uint seats;
+        uint amount; // in wei
+        RideStatus status;
+        address payable user;
     }
 
-    mapping(address => Driver) public drivers;
-    RideRequest[] public rideRequests;
+    uint public rideCount;
+    mapping(uint => Ride) public rides;
 
-    event DriverRegistered(address indexed driver, string name, string vehicle);
-    event RideRequested(address indexed requester, string pickup, string destination);
-    event RideAccepted(address indexed driver, uint256 rideIndex);
-    event PaymentCompleted(address indexed passenger, address indexed driver, uint256 amount);
+    // Events
+    event RideProposed(
+        uint indexed id,
+        address indexed driver,
+        string source,
+        string destination,
+        uint seats,
+        uint amount
+    );
+    event RideSelected(uint indexed id, address indexed user);
+    event RideCompleted(uint indexed id);
 
-    modifier onlyDriver() {
-        require(bytes(drivers[msg.sender].name).length > 0, "You are not a registered driver.");
-        _;
+    // Driver proposes a new ride
+    function proposeRide(
+        string memory _source,
+        string memory _destination,
+        uint _seats,
+        uint _amount
+    ) public {
+        rideCount++;
+        rides[rideCount] = Ride({
+            id: rideCount,
+            driver: payable(msg.sender),
+            source: _source,
+            destination: _destination,
+            seats: _seats,
+            amount: _amount,
+            status: RideStatus.NotStarted,
+            user: payable(address(0))
+        });
+        emit RideProposed(rideCount, msg.sender, _source, _destination, _seats, _amount);
     }
 
-    function registerDriver(string memory _name, string memory _vehicle) public {
-        require(bytes(drivers[msg.sender].name).length == 0, "Driver already registered.");
-        drivers[msg.sender] = Driver(_name, _vehicle, msg.sender, true);
-        emit DriverRegistered(msg.sender, _name, _vehicle);
+    // User selects a ride and pays the exact amount
+    function selectRide(uint _rideId) public payable {
+        require(_rideId > 0 && _rideId <= rideCount, "Invalid ride ID");
+        Ride storage ride = rides[_rideId];
+        require(ride.status == RideStatus.NotStarted, "Ride not available");
+        require(msg.value == ride.amount, "Incorrect amount sent");
+
+        ride.user = payable(msg.sender);
+        ride.status = RideStatus.Ongoing;
+        emit RideSelected(_rideId, msg.sender);
     }
 
-    function getRegisteredDrivers() public view returns (address[] memory, string[] memory, string[] memory) {
-        uint256 count = 0;
-        for (uint256 i = 0; i < rideRequests.length; i++) {
-            if (drivers[rideRequests[i].driver].driverAddress != address(0)) {
-                count++;
-            }
-        }
+    // Driver completes an ongoing ride and gets paid
+    function completeRide(uint _rideId) public {
+        require(_rideId > 0 && _rideId <= rideCount, "Invalid ride ID");
+        Ride storage ride = rides[_rideId];
+        require(msg.sender == ride.driver, "Only driver can complete ride");
+        require(ride.status == RideStatus.Ongoing, "Ride not ongoing");
 
-        address[] memory driverAddresses = new address[](count);
-        string[] memory driverNames = new string[](count);
-        string[] memory vehicleDetails = new string[](count);
-        uint256 index = 0;
-
-        for (uint256 i = 0; i < rideRequests.length; i++) {
-            if (drivers[rideRequests[i].driver].driverAddress != address(0)) {
-                driverAddresses[index] = rideRequests[i].driver;
-                driverNames[index] = drivers[rideRequests[i].driver].name;
-                vehicleDetails[index] = drivers[rideRequests[i].driver].vehicle;
-                index++;
-            }
-        }
-        return (driverAddresses, driverNames, vehicleDetails);
-    }
-
-    function createRideRequest(string memory _pickup, string memory _destination) public {
-        rideRequests.push(RideRequest(_pickup, _destination, msg.sender, false, address(0)));
-        emit RideRequested(msg.sender, _pickup, _destination);
-    }
-
-    function getAvailableRides() public view returns (RideRequest[] memory) {
-        return rideRequests;
-    }
-
-    function acceptRideRequest(uint256 _rideIndex) public onlyDriver {
-        require(_rideIndex < rideRequests.length, "Invalid ride index.");
-        require(!rideRequests[_rideIndex].isAccepted, "Ride already accepted.");
-        
-        rideRequests[_rideIndex].isAccepted = true;
-        rideRequests[_rideIndex].driver = msg.sender;
-        emit RideAccepted(msg.sender, _rideIndex);
-    }
-
-    function makePayment(uint256 _rideIndex) public payable {
-        require(_rideIndex < rideRequests.length, "Invalid ride index.");
-        require(rideRequests[_rideIndex].isAccepted, "Ride not accepted yet.");
-        require(msg.value > 0, "Payment amount must be greater than 0.");
-        require(rideRequests[_rideIndex].driver != address(0), "No driver assigned.");
-
-        address payable driver = payable(rideRequests[_rideIndex].driver);
-        driver.transfer(msg.value);
-
-        emit PaymentCompleted(msg.sender, driver, msg.value);
+        ride.status = RideStatus.Completed;
+        ride.driver.transfer(ride.amount);
+        emit RideCompleted(_rideId);
     }
 }
